@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>로보1472 키보드 제어 & 모니터링</title>
+  <style>
+    body { font-family: 'Malgun Gothic', sans-serif; text-align: center; background-color: #f4f4f9; margin-top: 50px; }
+    .box { background: white; padding: 20px; border-radius: 10px; display: inline-block; box-shadow: 0px 0px 10px rgba(0,0,0,0.1); width: 400px; }
+    #key-display { font-size: 60px; font-weight: bold; color: #333; margin: 20px 0; height: 80px; line-height: 80px; background: #eee; border-radius: 5px; }
+    #log { text-align: left; height: 150px; overflow-y: auto; background: #222; color: #0f0; padding: 10px; font-family: monospace; font-size: 14px; border-radius: 5px; }
+    .guide { font-size: 14px; color: #666; margin-bottom: 15px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>🤖 로보1472 실시간 제어</h2>
+    <div class="guide"><b>W: 전진 / S: 후진 / A: 좌 / D: 우</b><br>(키를 떼면 정지합니다)</div>
+    <div id="key-display">STOP</div>
+    <h3>움직인 기록 (Log)</h3>
+    <ul id="log"></ul>
+  </div>
+
+  <script>
+    const esp32IP = "10.114.189.122"; // 고정 IP
+    const gateway = `ws://${esp32IP}/ws`;
+    
+    let websocket = new WebSocket(gateway);
+    const keyDisplay = document.getElementById('key-display');
+    const logBox = document.getElementById('log');
+
+    websocket.onopen = function(e) {
+      addLog("ESP32와 연결되었습니다.");
+    };
+
+    websocket.onclose = function(e) {
+      addLog("연결이 끊어졌습니다.");
+    };
+
+    // 키보드를 누를 때
+    document.addEventListener('keydown', (e) => {
+      let key = e.key.toLowerCase();
+      if(['w', 'a', 's', 'd'].includes(key)) {
+        if (websocket.readyState === WebSocket.OPEN) {
+          websocket.send(key);
+          keyDisplay.innerText = key.toUpperCase();
+          let action = (key === 'w') ? "전진" : (key === 's') ? "후진" : (key === 'a') ? "좌회전" : "우회전";
+          addLog(action + " (" + key.toUpperCase() + ")");
+        }
+      }
+    });
+
+    // 키보드에서 손을 뗄 때 (정지 명령 'x' 전송)
+    document.addEventListener('keyup', (e) => {
+      let key = e.key.toLowerCase();
+      if(['w', 'a', 's', 'd'].includes(key)) {
+        if (websocket.readyState === WebSocket.OPEN) {
+          websocket.send('x');
+          keyDisplay.innerText = "STOP";
+          addLog("정지 (KEY UP)");
+        }
+      }
+    });
+
+    function addLog(msg) {
+      let timeStr = new Date().toLocaleTimeString();
+      logBox.innerHTML = `[${timeStr}] ${msg}<br>` + logBox.innerHTML;
+    }
+  </script>
+</body>
+</html>
