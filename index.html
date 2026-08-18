@@ -4,11 +4,20 @@
   <meta charset="UTF-8">
   <title>로보1472 키보드 제어 & 모니터링</title>
   <style>
-    body { font-family: 'Malgun Gothic', sans-serif; text-align: center; background-color: #f4f4f9; margin-top: 50px; }
-    .box { background: white; padding: 20px; border-radius: 10px; display: inline-block; box-shadow: 0px 0px 10px rgba(0,0,0,0.1); width: 400px; }
-    #key-display { font-size: 60px; font-weight: bold; color: #333; margin: 20px 0; height: 80px; line-height: 80px; background: #eee; border-radius: 5px; }
-    #log { text-align: left; height: 150px; overflow-y: auto; background: #222; color: #0f0; padding: 10px; font-family: monospace; font-size: 14px; border-radius: 5px; }
+    body { font-family: 'Malgun Gothic', sans-serif; text-align: center; background-color: #f4f4f9; margin-top: 30px; }
+    .box { background: white; padding: 20px; border-radius: 10px; display: inline-block; box-shadow: 0px 0px 10px rgba(0,0,0,0.1); width: 450px; }
+    #key-display { font-size: 60px; font-weight: bold; color: #333; margin: 15px 0; height: 80px; line-height: 80px; background: #eee; border-radius: 5px; }
+    #log { text-align: left; height: 150px; overflow-y: auto; background: #222; color: #0f0; padding: 10px; font-family: monospace; font-size: 14px; border-radius: 5px; margin-top: 15px; }
     .guide { font-size: 14px; color: #666; margin-bottom: 15px; }
+    .btn-group { margin: 15px 0; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+    button { padding: 10px 14px; font-size: 14px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+    .btn-rec-start { background-color: #e74c3c; color: white; }
+    .btn-rec-stop { background-color: #7f8c8d; color: white; }
+    .btn-play { background-color: #2ecc71; color: white; }
+    .btn-reverse { background-color: #f39c12; color: white; }
+    .btn-delete { background-color: #c0392b; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #rec-status { font-weight: bold; color: #d35400; margin-top: 5px; height: 20px; }
   </style>
 </head>
 <body>
@@ -16,50 +25,181 @@
     <h2>🤖 로보1472 실시간 제어</h2>
     <div class="guide"><b>W: 전진 / S: 후진 / A: 좌 / D: 우</b><br>(키를 떼면 정지합니다)</div>
     <div id="key-display">STOP</div>
+    
+    <!-- 버튼 그룹 -->
+    <div class="btn-group">
+      <button id="btnStart" class="btn-rec-start" onclick="startRecording()">기록 시작</button>
+      <button id="btnStop" class="btn-rec-stop" onclick="stopRecording()" disabled>기록 종료</button>
+      <button id="btnPlay" class="btn-play" onclick="playSequence(false)">기록 재생</button>
+      <button id="btnReverse" class="btn-reverse" onclick="playSequence(true)">되돌리기</button>
+      <button id="btnDelete" class="btn-delete" onclick="clearRecordedLogs()">기록 삭제</button>
+    </div>
+    <div id="rec-status"></div>
+
     <h3>움직인 기록 (Log)</h3>
     <ul id="log"></ul>
   </div>
 
   <script>
-    const esp32IP = "10.114.189.122"; // 고정 IP
+    const esp32IP = "10.114.189.123"; // 고정 IP
     const gateway = `ws://${esp32IP}/ws`;
     
     let websocket = new WebSocket(gateway);
     const keyDisplay = document.getElementById('key-display');
     const logBox = document.getElementById('log');
+    const recStatus = document.getElementById('rec-status');
 
-    websocket.onopen = function(e) {
-      addLog("ESP32와 연결되었습니다.");
+    // 기록 및 상태 변수
+    let isRecording = false;
+    let isPlaying = false;
+    let activeKey = null;          // 현재 눌려 있는 키
+    let keyPressStartTime = 0;     // 키를 누른 시점의 타임스탬프
+    let recordedActions = [];      // [{ cmd: 'w', duration: 1200 }, ...]
+
+    // 역방향 매핑 (되돌리기 전용)
+    const reverseCmdMap = {
+      'w': 's',
+      's': 'w',
+      'a': 'd',
+      'd': 'a'
     };
 
-    websocket.onclose = function(e) {
-      addLog("연결이 끊어졌습니다.");
-    };
+    websocket.onopen = function(e) { addLog("ESP32와 연결되었습니다."); };
+    websocket.onclose = function(e) { addLog("연결이 끊어졌습니다."); };
 
-    // 키보드를 누를 때
+    // 키보드 누를 때 (KeyDown)
     document.addEventListener('keydown', (e) => {
+      if (isPlaying) return; // 자동 재생/되돌리기 중에는 수동 조작 차단
+
       let key = e.key.toLowerCase();
-      if(['w', 'a', 's', 'd'].includes(key)) {
+
+      // W, A, S, D 키이고, 기존에 누르고 있던 키가 아닐 때만 실행 (연속 키입력 방지)
+      if (['w', 'a', 's', 'd'].includes(key) && activeKey !== key) {
+        activeKey = key;
+        keyPressStartTime = Date.now(); // 누른 시간 기록 시작
+
+        // ESP32로 이동 명령 전송 (기록 중이든 아니든 무조건 전송되어 즉시 움직임)
         if (websocket.readyState === WebSocket.OPEN) {
           websocket.send(key);
           keyDisplay.innerText = key.toUpperCase();
           let action = (key === 'w') ? "전진" : (key === 's') ? "후진" : (key === 'a') ? "좌회전" : "우회전";
-          addLog(action + " (" + key.toUpperCase() + ")");
+          
+          if (isRecording) {
+            addLog(`[기록중] ${action} (${key.toUpperCase()})`);
+          } else {
+            addLog(`${action} (${key.toUpperCase()})`);
+          }
         }
       }
     });
 
-    // 키보드에서 손을 뗄 때 (정지 명령 'x' 전송)
+    // 키보드 뗄 때 (KeyUp)
     document.addEventListener('keyup', (e) => {
+      if (isPlaying) return;
+
       let key = e.key.toLowerCase();
-      if(['w', 'a', 's', 'd'].includes(key)) {
+
+      // 현재 누르고 있던 방향키를 뗐을 때
+      if (['w', 'a', 's', 'd'].includes(key) && activeKey === key) {
+        let duration = Date.now() - keyPressStartTime; // 눌린 총 시간 계산 (ms)
+
+        // ★ 기록 중일 때만 배열에 (동작, 유지시간) 추가
+        if (isRecording) {
+          recordedActions.push({ cmd: key, duration: duration });
+          addLog(`ㄴ 저장됨: ${key.toUpperCase()} (${duration}ms)`);
+        }
+
+        activeKey = null; // 키 상태 초기화
+
+        // ESP32로 정지 명령('x') 전송
         if (websocket.readyState === WebSocket.OPEN) {
           websocket.send('x');
           keyDisplay.innerText = "STOP";
-          addLog("정지 (KEY UP)");
+          addLog("정지 (STOP)");
         }
       }
     });
+
+    // --- 제어 버튼 함수들 ---
+
+    // 1. 기록 시작
+    function startRecording() {
+      if (isPlaying) return;
+      isRecording = true;
+      recordedActions = []; // 기존 기록 초기화
+      
+      document.getElementById('btnStart').disabled = true;
+      document.getElementById('btnStop').disabled = false;
+      recStatus.innerText = "🔴 기록 중... (키보드로 조종하세요)";
+      addLog(">>> 기록이 시작되었습니다. 키보드로 로봇을 조종하세요.");
+    }
+
+    // 2. 기록 종료
+    function stopRecording() {
+      if (!isRecording) return;
+      isRecording = false;
+      
+      document.getElementById('btnStart').disabled = false;
+      document.getElementById('btnStop').disabled = true;
+      recStatus.innerText = `🟢 기록 완료 (총 ${recordedActions.length}개 동작 저장됨)`;
+      addLog(">>> 기록이 종료되었습니다.");
+    }
+
+    // 3. 기록 삭제
+    function clearRecordedLogs() {
+      if (isRecording || isPlaying) return;
+      recordedActions = [];
+      recStatus.innerText = "";
+      addLog(">>> 저장된 기록이 삭제되었습니다.");
+    }
+
+    // 4. 기록 재생 및 되돌리기
+    async function playSequence(isReverse = false) {
+      if (isRecording) {
+        alert("먼저 '기록 종료' 버튼을 눌러주세요.");
+        return;
+      }
+      if (recordedActions.length === 0) {
+        alert("저장된 기록이 없습니다.");
+        return;
+      }
+      if (isPlaying) return;
+
+      isPlaying = true;
+      const modeText = isReverse ? "되돌리기(역재생)" : "기록 재생";
+      recStatus.innerText = `▶️ ${modeText} 중...`;
+      addLog(`>>> ${modeText}을 시작합니다.`);
+
+      // 되돌리기의 경우 저장된 동작 배열을 반대로 뒤집음
+      let sequence = [...recordedActions];
+      if (isReverse) {
+        sequence.reverse();
+      }
+
+      for (let action of sequence) {
+        if (websocket.readyState !== WebSocket.OPEN) break;
+
+        // 되돌리기면 반대 명령(W<->S, A<->D), 정재생이면 저장된 명령 그대로 사용
+        let cmdToSend = isReverse ? reverseCmdMap[action.cmd] : action.cmd;
+
+        // ESP32로 명령 전송 및 UI 표시
+        websocket.send(cmdToSend);
+        keyDisplay.innerText = cmdToSend.toUpperCase();
+        addLog(`[${modeText}] ${cmdToSend.toUpperCase()} (${action.duration}ms)`);
+
+        // 기록된 시간(duration) 동안 실행 대기
+        await new Promise(resolve => setTimeout(resolve, action.duration));
+
+        // 다음 동작으로 넘어가기 전 잠시 정지
+        websocket.send('x');
+        keyDisplay.innerText = "STOP";
+        await new Promise(resolve => setTimeout(resolve, 80)); // 동작 간 0.08초 짧은 대기
+      }
+
+      isPlaying = false;
+      recStatus.innerText = `🟢 ${modeText} 완료`;
+      addLog(`>>> ${modeText}이 완료되었습니다.`);
+    }
 
     function addLog(msg) {
       let timeStr = new Date().toLocaleTimeString();
