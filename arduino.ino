@@ -5,10 +5,10 @@
 // ==============================
 // Wi-Fi 및 고정 IP 설정
 // ==============================
-const char* ssid = "SecondClass2.4G";
+const char* ssid = "FirstClass2.4G";
 const char* password = "12345678";
 
-IPAddress local_IP(10, 114, 189, 122);
+IPAddress local_IP(10, 114, 189, 123);
 IPAddress gateway(10, 114, 184, 1);
 IPAddress subnet(255, 255, 252, 0);
 
